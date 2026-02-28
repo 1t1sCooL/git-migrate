@@ -1,0 +1,11 @@
+.env
+
+mirrors/
+
+*.log
+report-*.json
+report-*.csv
+
+.DS_Store
+Thumbs.db
+Untitled
