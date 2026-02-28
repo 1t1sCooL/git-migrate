@@ -46,7 +46,7 @@
 ## Запуск
 
 ```powershell
-node .\migrate-gitlab-to-github.js
+node .\git-migrate.js
 ```
 
 ## Как это работает
