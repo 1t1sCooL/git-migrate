@@ -25,6 +25,8 @@ const config = {
   migrationDirection: process.env.MIGRATION_DIRECTION || "",
   interactiveNaming:
     (process.env.INTERACTIVE_NAMING || "true").toLowerCase() === "true",
+  syncFlatNames:
+    (process.env.SYNC_FLAT_NAMES || "false").toLowerCase() === "true",
   logLevel: resolveLogLevel(process.env.LOG_LEVEL),
 };
 
@@ -133,6 +135,18 @@ function buildProfiles(env) {
   return { sourceGitlab, sourceGithub, destGitlab, destGithub };
 }
 
+// Which sync destinations are fully configured.
+function activeSyncDestinations(remoteProfiles) {
+  return {
+    github: Boolean(
+      remoteProfiles.destGithub.token && remoteProfiles.destGithub.owner,
+    ),
+    gitlab: Boolean(
+      remoteProfiles.destGitlab.baseUrl && remoteProfiles.destGitlab.token,
+    ),
+  };
+}
+
 // Direction-aware replacement for the old global REQUIRED_ENV check.
 function validateProfilesForDirection(direction, remoteProfiles) {
   const missing = [];
@@ -140,7 +154,23 @@ function validateProfilesForDirection(direction, remoteProfiles) {
     if (!value) missing.push(label);
   };
 
-  if (direction === "gitlab-to-github") {
+  if (direction === "sync") {
+    req(
+      remoteProfiles.sourceGitlab.baseUrl,
+      "SOURCE_GITLAB_BASE_URL (or GITLAB_BASE_URL)",
+    );
+    req(
+      remoteProfiles.sourceGitlab.token,
+      "SOURCE_GITLAB_TOKEN (or GITLAB_TOKEN)",
+    );
+    const destinations = activeSyncDestinations(remoteProfiles);
+    if (!destinations.github && !destinations.gitlab) {
+      missing.push(
+        "at least one destination: DEST_GITHUB_TOKEN + DEST_GITHUB_OWNER (GitHub) " +
+          "or DEST_GITLAB_BASE_URL + DEST_GITLAB_TOKEN (GitLab)",
+      );
+    }
+  } else if (direction === "gitlab-to-github") {
     req(
       remoteProfiles.sourceGitlab.baseUrl,
       "SOURCE_GITLAB_BASE_URL (or GITLAB_BASE_URL)",
@@ -279,6 +309,38 @@ function buildGitLabProjectPath(repo, sourceOwner) {
   return sanitizeRepoName(repo.name);
 }
 
+// GitHub limits repository names to 100 characters.
+const MAX_SYNC_REPO_NAME_LENGTH = 100;
+
+// Backup name for sync mode. By default keeps the full namespace path
+// (group__sub__project) so same-named projects from different work groups
+// cannot collide and overwrite each other's backups.
+function buildSyncRepoName(project, sanitizeSegment) {
+  let name;
+  if (config.syncFlatNames) {
+    name = sanitizeSegment(project.path);
+  } else {
+    name = String(project.path_with_namespace || project.path)
+      .split("/")
+      .map((segment) => sanitizeSegment(segment))
+      .filter(Boolean)
+      .join("__");
+  }
+
+  if (name.length > MAX_SYNC_REPO_NAME_LENGTH) {
+    name = name.slice(0, MAX_SYNC_REPO_NAME_LENGTH).replace(/[_.-]+$/, "");
+    logWarn(
+      `Sync repo name for '${project.path_with_namespace || project.path}' ` +
+        `truncated to ${MAX_SYNC_REPO_NAME_LENGTH} chars: ${name}`,
+    );
+  }
+
+  logDebug(
+    `buildSyncRepoName: ${project.path_with_namespace || project.path} -> ${name}`,
+  );
+  return name;
+}
+
 function sanitizeGitHubRepoSegment(name) {
   return String(name)
     .replace(/\//g, "-")
@@ -310,6 +372,9 @@ function normalizeDirection(value) {
   ) {
     return "github-to-gitlab";
   }
+  if (["3", "sync", "backup"].includes(normalized)) {
+    return "sync";
+  }
   return "";
 }
 
@@ -322,10 +387,11 @@ async function askDirection() {
     log("\nSelect migration direction:");
     log("1) GitLab -> GitHub");
     log("2) GitHub -> GitLab");
-    const answer = await rl.question("Enter 1 or 2: ");
+    log("3) Sync: source GitLab -> personal GitLab + GitHub (backup)");
+    const answer = await rl.question("Enter 1, 2 or 3: ");
     const direction = normalizeDirection(answer);
     if (!direction) {
-      throw new Error("Invalid direction. Use 1 or 2.");
+      throw new Error("Invalid direction. Use 1, 2 or 3.");
     }
     return direction;
   } finally {
@@ -940,9 +1006,190 @@ async function migrateGitHubToGitLab(repo) {
   log("Success");
 }
 
+// Backup one work repository into every configured personal destination.
+// No interactive prompts here: sync is designed to run unattended (cron).
+// A failure in one destination must not affect the other one.
+async function syncProject(project, destinations) {
+  const sourceUrlWithToken = project.http_url_to_repo.replace(
+    "://",
+    `://oauth2:${encodeToken(profiles.sourceGitlab.token)}@`,
+  );
+
+  const localMirrorPath = path.join(
+    config.mirrorRoot,
+    `sync__${project.path_with_namespace.replace(/\//g, "__")}.git`,
+  );
+
+  const targets = [];
+  if (destinations.github) targets.push("GitHub");
+  if (destinations.gitlab) targets.push("GitLab");
+  log(
+    `\n=== sync ${project.path_with_namespace} -> ${targets.join(" + ")} ===`,
+  );
+
+  const result = {
+    github: destinations.github ? "pending" : "skipped",
+    gitlab: destinations.gitlab ? "pending" : "skipped",
+  };
+
+  if (config.dryRun) {
+    if (destinations.github) {
+      const repoName = buildSyncRepoName(project, sanitizeGitHubRepoSegment);
+      log(
+        `[DRY RUN] would push to GitHub ${profiles.destGithub.owner}/${repoName}`,
+      );
+      result.github = "ok";
+    }
+    if (destinations.gitlab) {
+      const projectPath = buildSyncRepoName(project, sanitizeGitLabPathSegment);
+      log(
+        `[DRY RUN] would push to GitLab ${profiles.destGitlab.baseUrl} as ${projectPath}`,
+      );
+      result.gitlab = "ok";
+    }
+    return result;
+  }
+
+  fs.mkdirSync(path.dirname(localMirrorPath), { recursive: true });
+  await ensureMirrorUpToDate(localMirrorPath, sourceUrlWithToken);
+
+  if (destinations.github) {
+    try {
+      const repoName = buildSyncRepoName(project, sanitizeGitHubRepoSegment);
+      const { created } = await ensureGitHubRepo(
+        profiles.destGithub,
+        repoName,
+        `Backup of ${project.path_with_namespace}`,
+      );
+      logDebug(
+        created
+          ? `GitHub repository created: ${repoName}`
+          : `GitHub repository exists: ${repoName}`,
+      );
+      const githubUrlWithToken = `https://x-access-token:${encodeToken(
+        profiles.destGithub.token,
+      )}@github.com/${profiles.destGithub.owner}/${repoName}.git`;
+      await pushMirror(localMirrorPath, "github", githubUrlWithToken);
+      log(`GitHub: ok (${profiles.destGithub.owner}/${repoName})`);
+      result.github = "ok";
+    } catch (err) {
+      result.github = "failed";
+      logError(
+        `GitHub destination failed for ${project.path_with_namespace}: ${err.message}`,
+      );
+    }
+  }
+
+  if (destinations.gitlab) {
+    try {
+      const projectPath = buildSyncRepoName(project, sanitizeGitLabPathSegment);
+      const namespaceId = profiles.destGitlab.namespaceId
+        ? Number(profiles.destGitlab.namespaceId)
+        : null;
+      const { created, project: destProject } = await ensureGitLabProject(
+        profiles.destGitlab,
+        projectPath,
+        `Backup of ${project.path_with_namespace}`,
+        namespaceId,
+      );
+      logDebug(
+        created
+          ? `GitLab project created: ${projectPath}`
+          : `GitLab project exists: ${projectPath}`,
+      );
+      const gitlabUrlWithToken = destProject.http_url_to_repo.replace(
+        "://",
+        `://oauth2:${encodeToken(profiles.destGitlab.token)}@`,
+      );
+      await pushMirror(localMirrorPath, "gitlab", gitlabUrlWithToken);
+      log(
+        `GitLab: ok (${destProject.path_with_namespace || projectPath})`,
+      );
+      result.gitlab = "ok";
+    } catch (err) {
+      result.gitlab = "failed";
+      logError(
+        `GitLab destination failed for ${project.path_with_namespace}: ${err.message}`,
+      );
+    }
+  }
+
+  return result;
+}
+
+// Sync flow: fetch every available work repository once, push the mirror
+// into all configured personal destinations, report per-destination totals.
+async function runSync() {
+  const destinations = activeSyncDestinations(profiles);
+
+  log("Starting sync (backup)");
+  log(`Source: GitLab ${profiles.sourceGitlab.baseUrl}`);
+  if (destinations.github) {
+    log(
+      `Destination: GitHub ${profiles.destGithub.owner} (${profiles.destGithub.ownerType})`,
+    );
+  }
+  if (destinations.gitlab) {
+    log(`Destination: GitLab ${profiles.destGitlab.baseUrl}`);
+  }
+  if (!destinations.github || !destinations.gitlab) {
+    logWarn(
+      "Only one sync destination is configured; the backup will not be duplicated",
+    );
+  }
+
+  const projects = await getGitLabProjects(profiles.sourceGitlab);
+  log(`Repositories found: ${projects.length}`);
+
+  const counters = {
+    github: { ok: 0, failed: 0, skipped: 0 },
+    gitlab: { ok: 0, failed: 0, skipped: 0 },
+  };
+  let failedRepos = 0;
+
+  for (const project of projects) {
+    try {
+      const result = await syncProject(project, destinations);
+      counters.github[result.github] += 1;
+      counters.gitlab[result.gitlab] += 1;
+      if (result.github === "failed" || result.gitlab === "failed") {
+        failedRepos += 1;
+      }
+    } catch (err) {
+      // Source-side failure (fetch of the mirror itself).
+      failedRepos += 1;
+      if (destinations.github) counters.github.failed += 1;
+      if (destinations.gitlab) counters.gitlab.failed += 1;
+      logError(`Failed: ${project.path_with_namespace} -> ${err.message}`);
+    }
+  }
+
+  log(`\nSync done. Repositories: ${projects.length}`);
+  if (destinations.github) {
+    log(
+      `GitHub: ok ${counters.github.ok}, failed ${counters.github.failed}`,
+    );
+  }
+  if (destinations.gitlab) {
+    log(
+      `GitLab: ok ${counters.gitlab.ok}, failed ${counters.gitlab.failed}`,
+    );
+  }
+  if (failedRepos > 0) {
+    logWarn(`Repositories with failures: ${failedRepos}`);
+    process.exitCode = 1;
+  }
+}
+
 async function main() {
   const direction = await askDirection();
   validateProfilesForDirection(direction, profiles);
+  fs.mkdirSync(config.mirrorRoot, { recursive: true });
+
+  if (direction === "sync") {
+    return runSync();
+  }
+
   log(`Starting migration: ${direction}`);
   if (direction === "gitlab-to-github") {
     log(`Source: GitLab ${profiles.sourceGitlab.baseUrl}`);
@@ -955,7 +1202,6 @@ async function main() {
     );
     log(`Destination: GitLab ${profiles.destGitlab.baseUrl}`);
   }
-  fs.mkdirSync(config.mirrorRoot, { recursive: true });
 
   const items =
     direction === "gitlab-to-github"
@@ -1008,4 +1254,6 @@ module.exports = {
   sanitizeGitLabPathSegment,
   buildGitHubRepoName,
   buildGitLabProjectPath,
+  buildSyncRepoName,
+  activeSyncDestinations,
 };
