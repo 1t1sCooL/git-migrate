@@ -22,7 +22,7 @@ Rationale: закрывают два оставшихся реализуемых
 ## Tasks
 
 - [x] Task 16: Фильтры обнаружения include/exclude + тесты — matchesPattern/filterRepositories, применение в runSync и main(), .env.example
-- [ ] Task 17: JSON-отчёт синхронизации + тесты — buildSyncReport, запись в runSync, SYNC_REPORT/SYNC_REPORT_FILE, .env.example
+- [x] Task 17: JSON-отчёт синхронизации + тесты — buildSyncReport, запись в runSync, SYNC_REPORT/SYNC_REPORT_FILE, .env.example
 
 ## Критерии готовности
 

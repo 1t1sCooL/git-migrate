@@ -17,6 +17,7 @@ const {
   activeSyncDestinations,
   matchesPattern,
   filterRepositories,
+  buildSyncReport,
 } = require("../git-migrate.js");
 
 test("buildProfiles: легаси-переменные заполняют обе стороны", () => {
@@ -314,6 +315,41 @@ test("filterRepositories: include, exclude и их приоритет", () => {
     filterRepositories(repos, byName, ["team/*"], ["*/sandbox-*"]).map(byName),
     ["team/app"],
   );
+});
+
+test("buildSyncReport: totals и список репозиториев", () => {
+  const meta = {
+    startedAt: "2026-06-10T10:00:00.000Z",
+    finishedAt: "2026-06-10T10:05:00.000Z",
+    dryRun: false,
+    source: "https://work.gitlab.com",
+    destinations: { github: true, gitlab: true },
+  };
+  const repos = [
+    { name: "team/app", github: "ok", gitlab: "ok" },
+    { name: "team/lib", github: "failed", gitlab: "ok" },
+    { name: "team/old", github: "ok", gitlab: "skipped" },
+  ];
+
+  const report = buildSyncReport(meta, repos);
+
+  assert.equal(report.source, "https://work.gitlab.com");
+  assert.deepEqual(report.totals.github, { ok: 2, failed: 1, skipped: 0 });
+  assert.deepEqual(report.totals.gitlab, { ok: 2, failed: 0, skipped: 1 });
+  assert.equal(report.repos.length, 3);
+  assert.deepEqual(report.repos[1], {
+    name: "team/lib",
+    github: "failed",
+    gitlab: "ok",
+  });
+  // отчёт сериализуем в JSON без потерь
+  assert.deepEqual(JSON.parse(JSON.stringify(report)), report);
+});
+
+test("buildSyncReport: пустой прогон", () => {
+  const report = buildSyncReport({ dryRun: true }, []);
+  assert.deepEqual(report.totals.github, { ok: 0, failed: 0, skipped: 0 });
+  assert.deepEqual(report.repos, []);
 });
 
 test("санитайзеры имён репозиториев", () => {

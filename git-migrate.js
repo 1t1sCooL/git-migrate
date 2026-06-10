@@ -29,6 +29,8 @@ const config = {
     (process.env.SYNC_FLAT_NAMES || "false").toLowerCase() === "true",
   includePatterns: parsePatternList(process.env.REPO_INCLUDE_PATTERNS),
   excludePatterns: parsePatternList(process.env.REPO_EXCLUDE_PATTERNS),
+  syncReport: (process.env.SYNC_REPORT || "true").toLowerCase() === "true",
+  syncReportFile: process.env.SYNC_REPORT_FILE || "",
   logLevel: resolveLogLevel(process.env.LOG_LEVEL),
 };
 
@@ -1160,6 +1162,19 @@ async function syncProject(project, destinations) {
   return result;
 }
 
+// Machine-readable summary of a sync run; pure for testability.
+function buildSyncReport(meta, repoResults) {
+  const totals = {
+    github: { ok: 0, failed: 0, skipped: 0 },
+    gitlab: { ok: 0, failed: 0, skipped: 0 },
+  };
+  for (const repo of repoResults) {
+    totals.github[repo.github] += 1;
+    totals.gitlab[repo.gitlab] += 1;
+  }
+  return { ...meta, totals, repos: repoResults };
+}
+
 // Sync flow: fetch every available work repository once, push the mirror
 // into all configured personal destinations, report per-destination totals.
 async function runSync() {
@@ -1190,40 +1205,69 @@ async function runSync() {
   );
   log(`Repositories found: ${projects.length}`);
 
-  const counters = {
-    github: { ok: 0, failed: 0, skipped: 0 },
-    gitlab: { ok: 0, failed: 0, skipped: 0 },
-  };
-  let failedRepos = 0;
+  const startedAt = new Date().toISOString();
+  const repoResults = [];
 
   for (const project of projects) {
     try {
       const result = await syncProject(project, destinations);
-      counters.github[result.github] += 1;
-      counters.gitlab[result.gitlab] += 1;
-      if (result.github === "failed" || result.gitlab === "failed") {
-        failedRepos += 1;
-      }
+      repoResults.push({
+        name: project.path_with_namespace,
+        github: result.github,
+        gitlab: result.gitlab,
+      });
     } catch (err) {
       // Source-side failure (fetch of the mirror itself).
-      failedRepos += 1;
-      if (destinations.github) counters.github.failed += 1;
-      if (destinations.gitlab) counters.gitlab.failed += 1;
+      repoResults.push({
+        name: project.path_with_namespace,
+        github: destinations.github ? "failed" : "skipped",
+        gitlab: destinations.gitlab ? "failed" : "skipped",
+      });
       logError(`Failed: ${project.path_with_namespace} -> ${err.message}`);
     }
   }
 
+  const report = buildSyncReport(
+    {
+      startedAt,
+      finishedAt: new Date().toISOString(),
+      dryRun: config.dryRun,
+      source: profiles.sourceGitlab.baseUrl,
+      destinations,
+    },
+    repoResults,
+  );
+
   log(`\nSync done. Repositories: ${projects.length}`);
   if (destinations.github) {
     log(
-      `GitHub: ok ${counters.github.ok}, failed ${counters.github.failed}`,
+      `GitHub: ok ${report.totals.github.ok}, failed ${report.totals.github.failed}`,
     );
   }
   if (destinations.gitlab) {
     log(
-      `GitLab: ok ${counters.gitlab.ok}, failed ${counters.gitlab.failed}`,
+      `GitLab: ok ${report.totals.gitlab.ok}, failed ${report.totals.gitlab.failed}`,
     );
   }
+
+  if (!config.dryRun && config.syncReport) {
+    const stamp = report.finishedAt
+      .replace(/[-:]/g, "")
+      .replace(/\..+$/, "")
+      .replace("T", "-");
+    const reportPath = config.syncReportFile || `report-sync-${stamp}.json`;
+    try {
+      fs.writeFileSync(reportPath, `${JSON.stringify(report, null, 2)}\n`);
+      log(`Report: ${reportPath}`);
+    } catch (err) {
+      // A failed report write must not fail the backup itself.
+      logWarn(`Failed to write report ${reportPath}: ${err.message}`);
+    }
+  }
+
+  const failedRepos = repoResults.filter(
+    (repo) => repo.github === "failed" || repo.gitlab === "failed",
+  ).length;
   if (failedRepos > 0) {
     logWarn(`Repositories with failures: ${failedRepos}`);
     process.exitCode = 1;
@@ -1313,4 +1357,5 @@ module.exports = {
   activeSyncDestinations,
   matchesPattern,
   filterRepositories,
+  buildSyncReport,
 };
