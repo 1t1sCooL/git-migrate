@@ -9,6 +9,8 @@ CLI-утилита на Node.js для зеркальной миграции р�
 - Выбор направления миграции: интерактивно или через `MIGRATION_DIRECTION` (включая третье направление `sync`)
 - Режим `sync` (бекап): один fetch всех доступных репозиториев рабочего GitLab, push --mirror в личные GitLab и GitHub за один проход (`make backup`); без интерактива, изоляция ошибок по назначениям, имена `group__sub__project` против коллизий (`SYNC_FLAT_NAMES=true` — плоские)
 - Автобекап по расписанию (macOS launchd): `make schedule-install BACKUP_TIME=13:00` ставит ежедневный агент `com.git-migrate.backup` (`scripts/schedule.sh` + plist-шаблон), логи в `logs/`
+- Фильтры обнаружения: `REPO_INCLUDE_PATTERNS`/`REPO_EXCLUDE_PATTERNS` (glob по полному пути, exclude побеждает) — для sync и обоих направлений миграции
+- JSON-отчёт после sync: `report-sync-<timestamp>.json` с totals и статусом каждого репозитория (`SYNC_REPORT`, `SYNC_REPORT_FILE`)
 - Получение списка репозиториев источника через REST API (GitLab/GitHub) с пагинацией
 - Автоматическое создание репозитория/проекта на стороне назначения, если он отсутствует
 - Сохранение исходного имени репозитория (настраивается через `USE_ORIGINAL_REPO_NAME`)
