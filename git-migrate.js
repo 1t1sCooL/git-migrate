@@ -315,9 +315,9 @@ const MAX_SYNC_REPO_NAME_LENGTH = 100;
 // Backup name for sync mode. By default keeps the full namespace path
 // (group__sub__project) so same-named projects from different work groups
 // cannot collide and overwrite each other's backups.
-function buildSyncRepoName(project, sanitizeSegment) {
+function buildSyncRepoName(project, sanitizeSegment, flat = config.syncFlatNames) {
   let name;
-  if (config.syncFlatNames) {
+  if (flat) {
     name = sanitizeSegment(project.path);
   } else {
     name = String(project.path_with_namespace || project.path)

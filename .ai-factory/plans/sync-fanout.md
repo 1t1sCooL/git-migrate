@@ -39,8 +39,8 @@ Rationale: ключевой шаг к единой команде бекапа �
 
 ### Фаза 3: Команда и проверка (зависят от 10)
 
-- [ ] Task 11: make backup и backup-dry-run — единая команда бекапа в Makefile
-- [ ] Task 12: Тесты sync — направление, валидация назначений, buildSyncRepoName
+- [x] Task 11: make backup и backup-dry-run — единая команда бекапа в Makefile
+- [x] Task 12: Тесты sync — направление, валидация назначений, buildSyncRepoName
 
 ## Commit Plan
 

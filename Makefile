@@ -14,7 +14,7 @@ ENV_FILE    := .env
 ENV_EXAMPLE := .env.example
 MIRROR_ROOT ?= ./mirrors
 
-.PHONY: help setup check test run dry-run migrate-gl2gh migrate-gh2gl clean ci
+.PHONY: help setup check test run dry-run migrate-gl2gh migrate-gh2gl backup backup-dry-run clean ci
 
 ##@ General
 
@@ -53,6 +53,12 @@ migrate-gl2gh: ## Реальная миграция GitLab -> GitHub
 
 migrate-gh2gl: ## Реальная миграция GitHub -> GitLab
 	@MIGRATION_DIRECTION=github-to-gitlab DRY_RUN=false $(NODE) $(ENTRY)
+
+backup: ## Бекап: все рабочие репозитории -> личные GitLab + GitHub
+	@MIGRATION_DIRECTION=sync DRY_RUN=false $(NODE) $(ENTRY)
+
+backup-dry-run: ## Безопасная проверка бекапа без изменений
+	@MIGRATION_DIRECTION=sync DRY_RUN=true $(NODE) $(ENTRY)
 
 ##@ Maintenance
 

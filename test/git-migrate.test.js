@@ -13,6 +13,8 @@ const {
   sanitizeRepoName,
   sanitizeGitHubRepoSegment,
   sanitizeGitLabPathSegment,
+  buildSyncRepoName,
+  activeSyncDestinations,
 } = require("../git-migrate.js");
 
 test("buildProfiles: легаси-переменные заполняют обе стороны", () => {
@@ -159,6 +161,115 @@ test("normalizeBaseUrl: обрезает завершающие слэши", () 
   assert.equal(normalizeBaseUrl("https://gitlab.com///"), "https://gitlab.com");
   assert.equal(normalizeBaseUrl(""), "");
   assert.equal(normalizeBaseUrl(undefined), "");
+});
+
+test("normalizeDirection: sync-синонимы", () => {
+  assert.equal(normalizeDirection("3"), "sync");
+  assert.equal(normalizeDirection("sync"), "sync");
+  assert.equal(normalizeDirection("BACKUP"), "sync");
+});
+
+test("validateProfilesForDirection: sync требует источник и хотя бы одно назначение", () => {
+  // нет ничего — перечисляет источник и назначения
+  assert.throws(
+    () => validateProfilesForDirection("sync", buildProfiles({})),
+    (err) => {
+      assert.match(err.message, /SOURCE_GITLAB_BASE_URL/);
+      assert.match(err.message, /at least one destination/);
+      return true;
+    },
+  );
+
+  const source = {
+    SOURCE_GITLAB_BASE_URL: "https://work.gitlab.com",
+    SOURCE_GITLAB_TOKEN: "t",
+  };
+
+  // источник есть, назначений нет — ошибка только про назначения
+  assert.throws(
+    () => validateProfilesForDirection("sync", buildProfiles(source)),
+    /at least one destination/,
+  );
+
+  // достаточно одного GitHub-назначения
+  assert.doesNotThrow(() =>
+    validateProfilesForDirection(
+      "sync",
+      buildProfiles({ ...source, DEST_GITHUB_TOKEN: "t", DEST_GITHUB_OWNER: "me" }),
+    ),
+  );
+
+  // достаточно одного GitLab-назначения
+  assert.doesNotThrow(() =>
+    validateProfilesForDirection(
+      "sync",
+      buildProfiles({
+        ...source,
+        DEST_GITLAB_BASE_URL: "https://gitlab.com",
+        DEST_GITLAB_TOKEN: "t",
+      }),
+    ),
+  );
+
+  // назначение есть, источника нет — ошибка про источник
+  assert.throws(
+    () =>
+      validateProfilesForDirection(
+        "sync",
+        buildProfiles({ DEST_GITHUB_TOKEN: "t", DEST_GITHUB_OWNER: "me" }),
+      ),
+    /SOURCE_GITLAB_TOKEN/,
+  );
+});
+
+test("activeSyncDestinations: определяет полностью настроенные назначения", () => {
+  const profiles = buildProfiles({
+    DEST_GITHUB_TOKEN: "t",
+    DEST_GITHUB_OWNER: "me",
+    DEST_GITLAB_BASE_URL: "https://gitlab.com",
+    // DEST_GITLAB_TOKEN отсутствует — gitlab не активен
+  });
+  assert.deepEqual(activeSyncDestinations(profiles), {
+    github: true,
+    gitlab: false,
+  });
+});
+
+test("buildSyncRepoName: путь через __ по умолчанию", () => {
+  const project = { path: "lib", path_with_namespace: "team/sub/lib" };
+  assert.equal(
+    buildSyncRepoName(project, sanitizeGitHubRepoSegment, false),
+    "team__sub__lib",
+  );
+  assert.equal(
+    buildSyncRepoName(project, sanitizeGitLabPathSegment, false),
+    "team__sub__lib",
+  );
+});
+
+test("buildSyncRepoName: flat-режим использует только имя проекта", () => {
+  const project = { path: "lib", path_with_namespace: "team/sub/lib" };
+  assert.equal(buildSyncRepoName(project, sanitizeGitHubRepoSegment, true), "lib");
+});
+
+test("buildSyncRepoName: сегменты санитизируются, длина ограничена 100", () => {
+  const project = {
+    path: "App Name",
+    path_with_namespace: "My Group/App Name",
+  };
+  assert.equal(
+    buildSyncRepoName(project, sanitizeGitHubRepoSegment, false),
+    "My-Group__App-Name",
+  );
+
+  const longSegment = "a".repeat(120);
+  const longProject = {
+    path: longSegment,
+    path_with_namespace: `group/${longSegment}`,
+  };
+  const name = buildSyncRepoName(longProject, sanitizeGitHubRepoSegment, false);
+  assert.ok(name.length <= 100, `length ${name.length} > 100`);
+  assert.ok(name.startsWith("group__a"));
 });
 
 test("санитайзеры имён репозиториев", () => {
