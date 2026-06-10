@@ -6,6 +6,8 @@ mirrors/
 report-*.json
 report-*.csv
 
+.claude/settings.local.json
+
 .DS_Store
 Thumbs.db
 Untitled
