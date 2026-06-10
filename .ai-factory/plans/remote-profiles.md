@@ -42,7 +42,7 @@ API-клиенты перестают читать глобальный config �
 ### Фаза 3: Сценарии и проверка (зависят от задач 3-4)
 
 - [x] Task 5: Сценарии миграции и main() на профилях — gl2gh: sourceGitlab→destGithub, gh2gl: sourceGithub→destGitlab; валидация по направлению; module.exports + require.main guard
-- [ ] Task 6: Тесты node:test + make test — buildProfiles/санитайзеры/normalizeDirection/parseNextLink/LOG_LEVEL; цель `test` в Makefile и в `ci`
+- [x] Task 6: Тесты node:test + make test — buildProfiles/санитайзеры/normalizeDirection/parseNextLink/LOG_LEVEL; цель `test` в Makefile и в `ci`
 
 ## Commit Plan
 

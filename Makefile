@@ -14,7 +14,7 @@ ENV_FILE    := .env
 ENV_EXAMPLE := .env.example
 MIRROR_ROOT ?= ./mirrors
 
-.PHONY: help setup check run dry-run migrate-gl2gh migrate-gh2gl clean ci
+.PHONY: help setup check test run dry-run migrate-gl2gh migrate-gh2gl clean ci
 
 ##@ General
 
@@ -36,6 +36,9 @@ setup: ## Создать .env из .env.example (если ещё нет)
 check: ## Проверить синтаксис скрипта (node --check)
 	@$(NODE) --check $(ENTRY)
 	@echo "Синтаксис OK: $(ENTRY)"
+
+test: ## Запустить тесты (node --test)
+	@$(NODE) --test
 
 ##@ Run
 
@@ -60,5 +63,5 @@ clean: ## Удалить локальные зеркала, логи и отчё
 
 ##@ CI
 
-ci: check ## Проверки для CI (синтаксис скрипта)
+ci: check test ## Проверки для CI (синтаксис + тесты)
 	@echo "CI checks passed"
