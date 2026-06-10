@@ -15,6 +15,8 @@ const {
   sanitizeGitLabPathSegment,
   buildSyncRepoName,
   activeSyncDestinations,
+  matchesPattern,
+  filterRepositories,
 } = require("../git-migrate.js");
 
 test("buildProfiles: легаси-переменные заполняют обе стороны", () => {
@@ -270,6 +272,48 @@ test("buildSyncRepoName: сегменты санитизируются, длин
   const name = buildSyncRepoName(longProject, sanitizeGitHubRepoSegment, false);
   assert.ok(name.length <= 100, `length ${name.length} > 100`);
   assert.ok(name.startsWith("group__a"));
+});
+
+test("matchesPattern: точное совпадение, glob и регистр", () => {
+  assert.ok(matchesPattern("team/app", "team/app"));
+  assert.ok(matchesPattern("team/app", "team/*"));
+  assert.ok(matchesPattern("team/sub/app", "team/*"));
+  assert.ok(matchesPattern("team/sandbox-x", "*/sandbox-*"));
+  assert.ok(matchesPattern("Team/App", "team/app")); // регистронезависимо
+  assert.ok(!matchesPattern("other/app", "team/*"));
+  assert.ok(!matchesPattern("team/app", "team")); // полное совпадение, не префикс
+  assert.ok(matchesPattern("a.b/c", "a.b/*")); // точка экранируется
+  assert.ok(!matchesPattern("axb/c", "a.b/*"));
+});
+
+test("filterRepositories: include, exclude и их приоритет", () => {
+  const repos = [
+    { name: "team/app" },
+    { name: "team/sandbox-test" },
+    { name: "other/lib" },
+  ];
+  const byName = (r) => r.name;
+
+  // пустые фильтры — всё проходит
+  assert.equal(filterRepositories(repos, byName, [], []).length, 3);
+
+  // только include
+  assert.deepEqual(
+    filterRepositories(repos, byName, ["team/*"], []).map(byName),
+    ["team/app", "team/sandbox-test"],
+  );
+
+  // только exclude
+  assert.deepEqual(
+    filterRepositories(repos, byName, [], ["*/sandbox-*"]).map(byName),
+    ["team/app", "other/lib"],
+  );
+
+  // exclude побеждает include
+  assert.deepEqual(
+    filterRepositories(repos, byName, ["team/*"], ["*/sandbox-*"]).map(byName),
+    ["team/app"],
+  );
 });
 
 test("санитайзеры имён репозиториев", () => {

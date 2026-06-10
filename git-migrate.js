@@ -27,8 +27,17 @@ const config = {
     (process.env.INTERACTIVE_NAMING || "true").toLowerCase() === "true",
   syncFlatNames:
     (process.env.SYNC_FLAT_NAMES || "false").toLowerCase() === "true",
+  includePatterns: parsePatternList(process.env.REPO_INCLUDE_PATTERNS),
+  excludePatterns: parsePatternList(process.env.REPO_EXCLUDE_PATTERNS),
   logLevel: resolveLogLevel(process.env.LOG_LEVEL),
 };
+
+function parsePatternList(value) {
+  return String(value || "")
+    .split(",")
+    .map((p) => p.trim())
+    .filter(Boolean);
+}
 
 const profiles = buildProfiles(process.env);
 
@@ -133,6 +142,40 @@ function buildProfiles(env) {
   };
 
   return { sourceGitlab, sourceGithub, destGitlab, destGithub };
+}
+
+// Glob-style match: '*' means any characters; the whole name must match.
+// Case-insensitive, because GitHub/GitLab paths are case-insensitive in practice.
+function matchesPattern(name, pattern) {
+  const escaped = pattern
+    .replace(/[.+^${}()|[\]\\]/g, "\\$&")
+    .replace(/\*/g, ".*");
+  return new RegExp(`^${escaped}$`, "i").test(name);
+}
+
+// Discovery filter: exclude wins over include; empty include means "all".
+// getName extracts the comparable full path (group/sub/project, owner/repo).
+function filterRepositories(items, getName, include, exclude) {
+  const kept = items.filter((item) => {
+    const name = getName(item);
+    if (include.length > 0 && !include.some((p) => matchesPattern(name, p))) {
+      logDebug(`filter: '${name}' not in include patterns -> skipped`);
+      return false;
+    }
+    if (exclude.some((p) => matchesPattern(name, p))) {
+      logDebug(`filter: '${name}' matches exclude pattern -> skipped`);
+      return false;
+    }
+    return true;
+  });
+
+  if (include.length > 0 || exclude.length > 0) {
+    log(
+      `Filtered out: ${items.length - kept.length} ` +
+        `(include: ${include.join(", ") || "-"}; exclude: ${exclude.join(", ") || "-"})`,
+    );
+  }
+  return kept;
 }
 
 // Which sync destinations are fully configured.
@@ -1138,7 +1181,13 @@ async function runSync() {
     );
   }
 
-  const projects = await getGitLabProjects(profiles.sourceGitlab);
+  const found = await getGitLabProjects(profiles.sourceGitlab);
+  const projects = filterRepositories(
+    found,
+    (p) => p.path_with_namespace,
+    config.includePatterns,
+    config.excludePatterns,
+  );
   log(`Repositories found: ${projects.length}`);
 
   const counters = {
@@ -1203,10 +1252,16 @@ async function main() {
     log(`Destination: GitLab ${profiles.destGitlab.baseUrl}`);
   }
 
-  const items =
+  const found =
     direction === "gitlab-to-github"
       ? await getGitLabProjects(profiles.sourceGitlab)
       : await getGitHubRepos(profiles.sourceGithub);
+  const items = filterRepositories(
+    found,
+    (item) => item.path_with_namespace || item.full_name || item.name || "",
+    config.includePatterns,
+    config.excludePatterns,
+  );
   log(`Repositories found: ${items.length}`);
 
   let ok = 0;
@@ -1256,4 +1311,6 @@ module.exports = {
   buildGitLabProjectPath,
   buildSyncRepoName,
   activeSyncDestinations,
+  matchesPattern,
+  filterRepositories,
 };
