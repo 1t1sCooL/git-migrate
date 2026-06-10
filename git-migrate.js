@@ -8,28 +8,16 @@ const { stdin, stdout } = require("node:process");
 
 loadEnvFromFile();
 
-const REQUIRED_ENV = [
-  "GITLAB_BASE_URL",
-  "GITLAB_TOKEN",
-  "GITHUB_TOKEN",
-  "GITHUB_OWNER",
-];
-
-for (const key of REQUIRED_ENV) {
-  if (!process.env[key]) {
-    console.error(`Missing required env var: ${key}`);
-    process.exit(1);
-  }
-}
+const LOG_LEVELS = { debug: 10, info: 20, warn: 30, error: 40 };
 
 const config = {
-  gitlabBaseUrl: process.env.GITLAB_BASE_URL.replace(/\/+$/, ""),
-  gitlabToken: process.env.GITLAB_TOKEN,
+  gitlabBaseUrl: (process.env.GITLAB_BASE_URL || "").replace(/\/+$/, ""),
+  gitlabToken: process.env.GITLAB_TOKEN || "",
   gitlabGroupId: process.env.GITLAB_GROUP_ID || "",
   gitlabTargetNamespaceId: process.env.GITLAB_TARGET_NAMESPACE_ID || "",
-  githubToken: process.env.GITHUB_TOKEN,
-  githubOwner: process.env.GITHUB_OWNER,
-  githubOwnerType: (process.env.GITHUB_OWNER_TYPE || "user").toLowerCase(), 
+  githubToken: process.env.GITHUB_TOKEN || "",
+  githubOwner: process.env.GITHUB_OWNER || "",
+  githubOwnerType: (process.env.GITHUB_OWNER_TYPE || "user").toLowerCase(),
   mirrorRoot: path.resolve(process.env.MIRROR_ROOT || "./mirrors"),
   includeArchived: process.env.INCLUDE_ARCHIVED === "true",
   dryRun: process.env.DRY_RUN === "true",
@@ -43,12 +31,190 @@ const config = {
   migrationDirection: process.env.MIGRATION_DIRECTION || "",
   interactiveNaming:
     (process.env.INTERACTIVE_NAMING || "true").toLowerCase() === "true",
+  logLevel: resolveLogLevel(process.env.LOG_LEVEL),
 };
+
+const profiles = buildProfiles(process.env);
 
 const gitlabNamespaceCache = new Map();
 
+function normalizeBaseUrl(value) {
+  return (value || "").replace(/\/+$/, "");
+}
+
+// Builds the four named remote profiles. New SOURCE_*/DEST_* variables win;
+// legacy GITLAB_*/GITHUB_* variables fill both source and dest sides so
+// existing configurations keep working unchanged.
+function buildProfiles(env) {
+  const pick = (label, ...candidates) => {
+    for (const [name, value] of candidates) {
+      if (value) {
+        logDebug(`profile ${label} <- ${name}`);
+        return value;
+      }
+    }
+    return "";
+  };
+
+  const sourceGitlab = {
+    baseUrl: normalizeBaseUrl(
+      pick(
+        "sourceGitlab.baseUrl",
+        ["SOURCE_GITLAB_BASE_URL", env.SOURCE_GITLAB_BASE_URL],
+        ["GITLAB_BASE_URL", env.GITLAB_BASE_URL],
+      ),
+    ),
+    token: pick(
+      "sourceGitlab.token",
+      ["SOURCE_GITLAB_TOKEN", env.SOURCE_GITLAB_TOKEN],
+      ["GITLAB_TOKEN", env.GITLAB_TOKEN],
+    ),
+    groupId: pick(
+      "sourceGitlab.groupId",
+      ["SOURCE_GITLAB_GROUP_ID", env.SOURCE_GITLAB_GROUP_ID],
+      ["GITLAB_GROUP_ID", env.GITLAB_GROUP_ID],
+    ),
+  };
+
+  const sourceGithub = {
+    token: pick(
+      "sourceGithub.token",
+      ["SOURCE_GITHUB_TOKEN", env.SOURCE_GITHUB_TOKEN],
+      ["GITHUB_TOKEN", env.GITHUB_TOKEN],
+    ),
+    owner: pick(
+      "sourceGithub.owner",
+      ["SOURCE_GITHUB_OWNER", env.SOURCE_GITHUB_OWNER],
+      ["GITHUB_OWNER", env.GITHUB_OWNER],
+    ),
+    ownerType: (
+      pick(
+        "sourceGithub.ownerType",
+        ["SOURCE_GITHUB_OWNER_TYPE", env.SOURCE_GITHUB_OWNER_TYPE],
+        ["GITHUB_OWNER_TYPE", env.GITHUB_OWNER_TYPE],
+      ) || "user"
+    ).toLowerCase(),
+  };
+
+  const destGitlab = {
+    baseUrl: normalizeBaseUrl(
+      pick(
+        "destGitlab.baseUrl",
+        ["DEST_GITLAB_BASE_URL", env.DEST_GITLAB_BASE_URL],
+        ["GITLAB_BASE_URL", env.GITLAB_BASE_URL],
+      ),
+    ),
+    token: pick(
+      "destGitlab.token",
+      ["DEST_GITLAB_TOKEN", env.DEST_GITLAB_TOKEN],
+      ["GITLAB_TOKEN", env.GITLAB_TOKEN],
+    ),
+    namespaceId: pick(
+      "destGitlab.namespaceId",
+      ["DEST_GITLAB_NAMESPACE_ID", env.DEST_GITLAB_NAMESPACE_ID],
+      ["GITLAB_TARGET_NAMESPACE_ID", env.GITLAB_TARGET_NAMESPACE_ID],
+    ),
+  };
+
+  const destGithub = {
+    token: pick(
+      "destGithub.token",
+      ["DEST_GITHUB_TOKEN", env.DEST_GITHUB_TOKEN],
+      ["GITHUB_TOKEN", env.GITHUB_TOKEN],
+    ),
+    owner: pick(
+      "destGithub.owner",
+      ["DEST_GITHUB_OWNER", env.DEST_GITHUB_OWNER],
+      ["GITHUB_OWNER", env.GITHUB_OWNER],
+    ),
+    ownerType: (
+      pick(
+        "destGithub.ownerType",
+        ["DEST_GITHUB_OWNER_TYPE", env.DEST_GITHUB_OWNER_TYPE],
+        ["GITHUB_OWNER_TYPE", env.GITHUB_OWNER_TYPE],
+      ) || "user"
+    ).toLowerCase(),
+  };
+
+  return { sourceGitlab, sourceGithub, destGitlab, destGithub };
+}
+
+// Direction-aware replacement for the old global REQUIRED_ENV check.
+function validateProfilesForDirection(direction, remoteProfiles) {
+  const missing = [];
+  const req = (value, label) => {
+    if (!value) missing.push(label);
+  };
+
+  if (direction === "gitlab-to-github") {
+    req(
+      remoteProfiles.sourceGitlab.baseUrl,
+      "SOURCE_GITLAB_BASE_URL (or GITLAB_BASE_URL)",
+    );
+    req(
+      remoteProfiles.sourceGitlab.token,
+      "SOURCE_GITLAB_TOKEN (or GITLAB_TOKEN)",
+    );
+    req(remoteProfiles.destGithub.token, "DEST_GITHUB_TOKEN (or GITHUB_TOKEN)");
+    req(remoteProfiles.destGithub.owner, "DEST_GITHUB_OWNER (or GITHUB_OWNER)");
+  } else {
+    req(
+      remoteProfiles.sourceGithub.token,
+      "SOURCE_GITHUB_TOKEN (or GITHUB_TOKEN)",
+    );
+    req(
+      remoteProfiles.sourceGithub.owner,
+      "SOURCE_GITHUB_OWNER (or GITHUB_OWNER)",
+    );
+    req(
+      remoteProfiles.destGitlab.baseUrl,
+      "DEST_GITLAB_BASE_URL (or GITLAB_BASE_URL)",
+    );
+    req(
+      remoteProfiles.destGitlab.token,
+      "DEST_GITLAB_TOKEN (or GITLAB_TOKEN)",
+    );
+  }
+
+  if (missing.length > 0) {
+    throw new Error(
+      `Missing required configuration for ${direction}: ${missing.join(", ")}`,
+    );
+  }
+}
+
+function resolveLogLevel(value) {
+  const raw = (value || "info").toLowerCase();
+  if (!(raw in LOG_LEVELS)) {
+    console.error(`[warn] Unknown LOG_LEVEL '${raw}', falling back to 'info'`);
+    return "info";
+  }
+  return raw;
+}
+
+function shouldLog(level) {
+  return LOG_LEVELS[level] >= LOG_LEVELS[config.logLevel];
+}
+
 function log(message) {
-  console.log(message);
+  if (shouldLog("info")) console.log(message);
+}
+
+function logDebug(message) {
+  if (shouldLog("debug")) console.log(`[debug] ${message}`);
+}
+
+function logWarn(message) {
+  if (shouldLog("warn")) console.error(`[warn] ${message}`);
+}
+
+function logError(message) {
+  if (shouldLog("error")) console.error(message);
+}
+
+// Strip embedded credentials (https://user:token@host) before logging.
+function redactUrl(value) {
+  return String(value).replace(/:\/\/[^@/\s]+@/g, "://***@");
 }
 
 function loadEnvFromFile() {
@@ -221,6 +387,7 @@ async function askTargetRepoName(sourceLabel, defaultName, sanitize, exists) {
 }
 
 async function run(cmd, args, options = {}) {
+  logDebug(`run: ${cmd} ${args.map(redactUrl).join(" ")}`);
   return new Promise((resolve, reject) => {
     const child = spawn(cmd, args, {
       stdio: options.stdio || "inherit",
@@ -253,6 +420,7 @@ async function gitlabGetAll(url) {
   let nextUrl = url;
 
   while (nextUrl) {
+    logDebug(`GitLab API GET ${nextUrl}`);
     const res = await fetch(nextUrl, {
       headers: {
         "PRIVATE-TOKEN": config.gitlabToken,
@@ -264,6 +432,7 @@ async function gitlabGetAll(url) {
     }
 
     const pageItems = await res.json();
+    logDebug(`GitLab API GET -> ${res.status}, items: ${pageItems.length}`);
     items.push(...pageItems);
 
     const nextPage = res.headers.get("x-next-page");
@@ -284,6 +453,7 @@ async function githubGetAll(url) {
   let nextUrl = url;
 
   while (nextUrl) {
+    logDebug(`GitHub API GET ${nextUrl}`);
     const res = await fetch(nextUrl, {
       headers: {
         Accept: "application/vnd.github+json",
@@ -361,6 +531,7 @@ async function getGitHubRepos() {
 }
 
 async function githubRequest(method, endpoint, body) {
+  logDebug(`GitHub API ${method} ${endpoint}`);
   const res = await fetch(`https://api.github.com${endpoint}`, {
     method,
     headers: {
@@ -390,6 +561,7 @@ async function githubRequest(method, endpoint, body) {
 }
 
 async function gitlabRequest(method, endpoint, body) {
+  logDebug(`GitLab API ${method} ${endpoint}`);
   const res = await fetch(`${config.gitlabBaseUrl}/api/v4${endpoint}`, {
     method,
     headers: {
@@ -569,6 +741,7 @@ async function resolveTargetNamespaceIdForGitHubRepo(repo) {
 }
 
 async function ensureMirrorUpToDate(localMirrorPath, gitlabUrlWithToken) {
+  logDebug(`ensureMirrorUpToDate: ${localMirrorPath}`);
   if (!fs.existsSync(localMirrorPath)) {
     await run("git", [
       "clone",
@@ -754,6 +927,7 @@ async function migrateGitHubToGitLab(repo) {
 
 async function main() {
   const direction = await askDirection();
+  validateProfilesForDirection(direction, profiles);
   log(`Starting migration: ${direction}`);
   fs.mkdirSync(config.mirrorRoot, { recursive: true });
 
@@ -778,7 +952,7 @@ async function main() {
       failed += 1;
       const sourceName =
         item.path_with_namespace || item.full_name || item.name || "unknown";
-      console.error(`Failed: ${sourceName} -> ${err.message}`);
+      logError(`Failed: ${sourceName} -> ${err.message}`);
     }
   }
 
@@ -787,6 +961,6 @@ async function main() {
 }
 
 main().catch((err) => {
-  console.error("Fatal error:", err);
+  logError(`Fatal error: ${err.stack || err}`);
   process.exit(1);
 });
