@@ -1,6 +1,7 @@
 .env
 
 mirrors/
+logs/
 
 *.log
 report-*.json

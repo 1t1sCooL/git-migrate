@@ -17,11 +17,13 @@ CLI-утилита на Node.js для двусторонней зеркальн
 
 ```
 git-migrate/
-├── git-migrate.js          # Единый исполняемый CLI-скрипт (вся логика миграции)
-├── .env.example            # Шаблон переменных окружения (токены, направление, флаги)
-├── Makefile                # Команды: setup, run, dry-run, migrate-*, check, clean
+├── git-migrate.js          # Единый исполняемый CLI-скрипт (миграция + sync-бекап)
+├── test/                   # Тесты node:test (make test)
+├── scripts/                # schedule.sh + launchd plist-шаблон (автобекап по расписанию)
+├── .env.example            # Шаблон переменных окружения (профили SOURCE_*/DEST_*, флаги)
+├── Makefile                # Команды: setup, run, backup, schedule-*, check, test, clean
 ├── README.md               # Посадочная страница (RU)
-├── docs/                   # Детальная документация (getting-started, configuration, usage)
+├── docs/                   # Детальная документация (getting-started, configuration, backup, usage)
 ├── .gitignore              # Игнорирует .env, mirrors/, логи, отчёты
 ├── .mcp.json               # Конфигурация MCP-серверов
 ├── .ai-factory/            # Контекст AI Factory (конфиг, описание, правила, архитектура)
@@ -37,7 +39,8 @@ git-migrate/
 
 | Файл | Назначение |
 |------|------------|
-| `git-migrate.js` | Точка входа CLI; `main()` оркестрирует выбор направления и пакетную миграцию |
+| `git-migrate.js` | Точка входа CLI; `main()` оркестрирует выбор направления, миграцию и sync-бекап |
+| `scripts/schedule.sh` | Управление launchd-агентом автобекапа (install/uninstall/status) |
 | `.env.example` | Эталон конфигурации окружения; копируется в `.env` перед запуском |
 | `.mcp.json` | Конфигурация MCP-серверов для AI-агентов |
 
@@ -48,6 +51,7 @@ git-migrate/
 | README | README.md | Посадочная страница проекта |
 | Getting Started | docs/getting-started.md | Требования, установка, настройка, первый запуск |
 | Configuration | docs/configuration.md | Переменные окружения и флаги |
+| Backup | docs/backup.md | Бекап одной командой и автобекап по расписанию |
 | Usage | docs/usage.md | Направления миграции и логика переноса |
 
 ## AI-контекстные файлы

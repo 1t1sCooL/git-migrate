@@ -26,7 +26,8 @@ make help      # все доступные команды
 
 ## Возможности
 
-- **Бекап одной командой** — `make backup`: fetch всех доступных рабочих репозиториев и push --mirror в личные GitLab + GitHub за один проход (режим `sync`, готов к cron). Подробнее — в [Backup](docs/backup.md).
+- **Бекап одной командой** — `make backup`: fetch всех доступных рабочих репозиториев и push --mirror в личные GitLab + GitHub за один проход. Подробнее — в [Backup](docs/backup.md).
+- **Автобекап по расписанию** — `make schedule-install BACKUP_TIME=13:00`: ежедневный launchd-агент (macOS), логи в `logs/`.
 - **Два направления миграции** — `GitLab → GitHub` и `GitHub → GitLab`, выбор интерактивно или через `MIGRATION_DIRECTION`.
 - **Профили источника и назначений** — раздельные токены и base URL: рабочий GitLab как источник, личные GitLab/GitHub как назначения (`SOURCE_*`/`DEST_*` с fallback на `GITLAB_*`/`GITHUB_*`).
 - **Полное зеркало** — перенос всей истории через `git clone --mirror` / `git push --mirror`.

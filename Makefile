@@ -14,7 +14,7 @@ ENV_FILE    := .env
 ENV_EXAMPLE := .env.example
 MIRROR_ROOT ?= ./mirrors
 
-.PHONY: help setup check test run dry-run migrate-gl2gh migrate-gh2gl backup backup-dry-run clean ci
+.PHONY: help setup check test run dry-run migrate-gl2gh migrate-gh2gl backup backup-dry-run schedule-install schedule-uninstall schedule-status clean ci
 
 ##@ General
 
@@ -59,6 +59,19 @@ backup: ## Бекап: все рабочие репозитории -> личн�
 
 backup-dry-run: ## Безопасная проверка бекапа без изменений
 	@MIGRATION_DIRECTION=sync DRY_RUN=true $(NODE) $(ENTRY)
+
+##@ Schedule
+
+BACKUP_TIME ?= 13:00
+
+schedule-install: ## Включить ежедневный автобекап (make schedule-install BACKUP_TIME=13:00)
+	@scripts/schedule.sh install "$(BACKUP_TIME)"
+
+schedule-uninstall: ## Выключить автобекап
+	@scripts/schedule.sh uninstall
+
+schedule-status: ## Статус автобекапа и последние логи
+	@scripts/schedule.sh status
 
 ##@ Maintenance
 

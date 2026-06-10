@@ -69,6 +69,21 @@ GitLab: ok 42, failed 0
 
 При любых сбоях код выхода ненулевой — удобно для cron-алертов.
 
+## Автобекап по расписанию (macOS)
+
+Ежедневный автозапуск через launchd (родной планировщик macOS — пропущенный во сне запуск выполнится при пробуждении, в отличие от cron):
+
+```bash
+make schedule-install                    # ежедневно в 13:00
+make schedule-install BACKUP_TIME=09:30  # своё время
+make schedule-status                     # состояние агента + хвост лога
+make schedule-uninstall                  # выключить
+```
+
+Под капотом: `scripts/schedule.sh` рендерит `scripts/com.git-migrate.backup.plist.template`, валидирует его `plutil -lint` и ставит пользовательский launchd-агент `com.git-migrate.backup`, который запускает `make backup`. Вывод пишется в `logs/backup.log` (ошибки — `logs/backup.err.log`); при сбое бекапа агент завершится с ненулевым кодом, это видно в `make schedule-status` (`last exit code`).
+
+Перед включением убедитесь, что `make backup-dry-run` отрабатывает корректно — агент использует тот же `.env`.
+
 ## Повторные запуски
 
 Локальные зеркала кешируются в `MIRROR_ROOT` (`./mirrors`): повторный запуск делает `git fetch --prune` вместо полного клона, поэтому регулярный бекап быстрый.

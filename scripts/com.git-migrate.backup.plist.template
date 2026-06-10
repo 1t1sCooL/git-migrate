@@ -1,0 +1,40 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.git-migrate.backup</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>/usr/bin/make</string>
+        <string>-C</string>
+        <string>{{REPO_DIR}}</string>
+        <string>backup</string>
+    </array>
+
+    <!-- launchd запускает агент с минимальным окружением: node и git нужно указать явно -->
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>PATH</key>
+        <string>{{PATH_VALUE}}</string>
+    </dict>
+
+    <!-- Ежедневный запуск; пропущенный во сне выполнится при пробуждении -->
+    <key>StartCalendarInterval</key>
+    <dict>
+        <key>Hour</key>
+        <integer>{{HOUR}}</integer>
+        <key>Minute</key>
+        <integer>{{MINUTE}}</integer>
+    </dict>
+
+    <key>StandardOutPath</key>
+    <string>{{REPO_DIR}}/logs/backup.log</string>
+    <key>StandardErrorPath</key>
+    <string>{{REPO_DIR}}/logs/backup.err.log</string>
+
+    <key>RunAtLoad</key>
+    <false/>
+</dict>
+</plist>
