@@ -10,14 +10,8 @@ loadEnvFromFile();
 
 const LOG_LEVELS = { debug: 10, info: 20, warn: 30, error: 40 };
 
+// Behavior flags only; remote credentials/endpoints live in `profiles`.
 const config = {
-  gitlabBaseUrl: (process.env.GITLAB_BASE_URL || "").replace(/\/+$/, ""),
-  gitlabToken: process.env.GITLAB_TOKEN || "",
-  gitlabGroupId: process.env.GITLAB_GROUP_ID || "",
-  gitlabTargetNamespaceId: process.env.GITLAB_TARGET_NAMESPACE_ID || "",
-  githubToken: process.env.GITHUB_TOKEN || "",
-  githubOwner: process.env.GITHUB_OWNER || "",
-  githubOwnerType: (process.env.GITHUB_OWNER_TYPE || "user").toLowerCase(),
   mirrorRoot: path.resolve(process.env.MIRROR_ROOT || "./mirrors"),
   includeArchived: process.env.INCLUDE_ARCHIVED === "true",
   dryRun: process.env.DRY_RUN === "true",
@@ -273,13 +267,13 @@ function buildGitHubRepoName(project) {
   return sanitizeRepoName(project.path);
 }
 
-function buildGitLabProjectPath(repo) {
+function buildGitLabProjectPath(repo, sourceOwner) {
   if (config.useOriginalRepoName) {
     return sanitizeGitLabPathSegment(repo.name);
   }
   if (config.preserveNamespace) {
     return sanitizeRepoName(
-      repo.full_name || `${config.githubOwner}/${repo.name}`,
+      repo.full_name || `${sourceOwner || ""}/${repo.name}`,
     );
   }
   return sanitizeRepoName(repo.name);
@@ -415,7 +409,7 @@ async function run(cmd, args, options = {}) {
   });
 }
 
-async function gitlabGetAll(url) {
+async function gitlabGetAll(profile, url) {
   const items = [];
   let nextUrl = url;
 
@@ -423,7 +417,7 @@ async function gitlabGetAll(url) {
     logDebug(`GitLab API GET ${nextUrl}`);
     const res = await fetch(nextUrl, {
       headers: {
-        "PRIVATE-TOKEN": config.gitlabToken,
+        "PRIVATE-TOKEN": profile.token,
       },
     });
 
@@ -448,7 +442,7 @@ async function gitlabGetAll(url) {
   return items;
 }
 
-async function githubGetAll(url) {
+async function githubGetAll(profile, url) {
   const items = [];
   let nextUrl = url;
 
@@ -457,7 +451,7 @@ async function githubGetAll(url) {
     const res = await fetch(nextUrl, {
       headers: {
         Accept: "application/vnd.github+json",
-        Authorization: `Bearer ${config.githubToken}`,
+        Authorization: `Bearer ${profile.token}`,
         "X-GitHub-Api-Version": "2022-11-28",
         "User-Agent": "git-mirror-migrator",
       },
@@ -498,45 +492,45 @@ function parseNextLink(linkHeader) {
   return "";
 }
 
-async function getGitLabProjects() {
+async function getGitLabProjects(profile) {
   const perPage = 100;
   let url;
 
-  if (config.gitlabGroupId) {
-    url = `${config.gitlabBaseUrl}/api/v4/groups/${encodeURIComponent(
-      config.gitlabGroupId,
+  if (profile.groupId) {
+    url = `${profile.baseUrl}/api/v4/groups/${encodeURIComponent(
+      profile.groupId,
     )}/projects?include_subgroups=true&per_page=${perPage}&page=1&simple=true`;
   } else {
-    url = `${config.gitlabBaseUrl}/api/v4/projects?membership=true&per_page=${perPage}&page=1&simple=true`;
+    url = `${profile.baseUrl}/api/v4/projects?membership=true&per_page=${perPage}&page=1&simple=true`;
   }
 
-  const projects = await gitlabGetAll(url);
+  const projects = await gitlabGetAll(profile, url);
   return projects.filter((p) => (config.includeArchived ? true : !p.archived));
 }
 
-async function getGitHubRepos() {
+async function getGitHubRepos(profile) {
   const perPage = 100;
-  if (config.githubOwnerType === "org") {
+  if (profile.ownerType === "org") {
     const url = `https://api.github.com/orgs/${encodeURIComponent(
-      config.githubOwner,
+      profile.owner,
     )}/repos?per_page=${perPage}&type=all&page=1`;
-    return githubGetAll(url);
+    return githubGetAll(profile, url);
   }
 
   const url = `https://api.github.com/user/repos?affiliation=owner&visibility=all&per_page=${perPage}&page=1`;
-  const repos = await githubGetAll(url);
+  const repos = await githubGetAll(profile, url);
   return repos.filter(
-    (repo) => repo.owner && repo.owner.login === config.githubOwner,
+    (repo) => repo.owner && repo.owner.login === profile.owner,
   );
 }
 
-async function githubRequest(method, endpoint, body) {
+async function githubRequest(profile, method, endpoint, body) {
   logDebug(`GitHub API ${method} ${endpoint}`);
   const res = await fetch(`https://api.github.com${endpoint}`, {
     method,
     headers: {
       Accept: "application/vnd.github+json",
-      Authorization: `Bearer ${config.githubToken}`,
+      Authorization: `Bearer ${profile.token}`,
       "X-GitHub-Api-Version": "2022-11-28",
       "User-Agent": "gitlab-to-github-mirror-migrator",
       ...(body ? { "Content-Type": "application/json" } : {}),
@@ -560,12 +554,12 @@ async function githubRequest(method, endpoint, body) {
   return data;
 }
 
-async function gitlabRequest(method, endpoint, body) {
+async function gitlabRequest(profile, method, endpoint, body) {
   logDebug(`GitLab API ${method} ${endpoint}`);
-  const res = await fetch(`${config.gitlabBaseUrl}/api/v4${endpoint}`, {
+  const res = await fetch(`${profile.baseUrl}/api/v4${endpoint}`, {
     method,
     headers: {
-      "PRIVATE-TOKEN": config.gitlabToken,
+      "PRIVATE-TOKEN": profile.token,
       ...(body ? { "Content-Type": "application/json" } : {}),
     },
     body: body ? JSON.stringify(body) : undefined,
@@ -598,9 +592,9 @@ function safeJsonParse(value) {
   }
 }
 
-async function githubRepoExists(repoName) {
+async function githubRepoExists(profile, repoName) {
   try {
-    await githubRequest("GET", `/repos/${config.githubOwner}/${repoName}`);
+    await githubRequest(profile, "GET", `/repos/${profile.owner}/${repoName}`);
     return true;
   } catch (err) {
     if (String(err.message).includes("404")) {
@@ -610,8 +604,8 @@ async function githubRepoExists(repoName) {
   }
 }
 
-async function ensureGitHubRepo(repoName, description) {
-  if (await githubRepoExists(repoName)) {
+async function ensureGitHubRepo(profile, repoName, description) {
+  if (await githubRepoExists(profile, repoName)) {
     return { created: false };
   }
 
@@ -625,17 +619,23 @@ async function ensureGitHubRepo(repoName, description) {
     has_wiki: false,
   };
 
-  if (config.githubOwnerType === "org") {
-    await githubRequest("POST", `/orgs/${config.githubOwner}/repos`, payload);
+  if (profile.ownerType === "org") {
+    await githubRequest(
+      profile,
+      "POST",
+      `/orgs/${profile.owner}/repos`,
+      payload,
+    );
   } else {
-    await githubRequest("POST", "/user/repos", payload);
+    await githubRequest(profile, "POST", "/user/repos", payload);
   }
 
   return { created: true };
 }
 
-async function findGitLabProjectByPath(repoPath, namespaceId) {
+async function findGitLabProjectByPath(profile, repoPath, namespaceId) {
   const result = await gitlabRequest(
+    profile,
     "GET",
     `/projects?search=${encodeURIComponent(repoPath)}&simple=true&per_page=100`,
   );
@@ -657,8 +657,8 @@ async function findGitLabProjectByPath(repoPath, namespaceId) {
   return null;
 }
 
-async function ensureGitLabProject(repoPath, description, namespaceId) {
-  const existing = await findGitLabProjectByPath(repoPath, namespaceId);
+async function ensureGitLabProject(profile, repoPath, description, namespaceId) {
+  const existing = await findGitLabProjectByPath(profile, repoPath, namespaceId);
   if (existing) {
     return { created: false, project: existing };
   }
@@ -675,11 +675,15 @@ async function ensureGitLabProject(repoPath, description, namespaceId) {
   }
 
   try {
-    const created = await gitlabRequest("POST", "/projects", payload);
+    const created = await gitlabRequest(profile, "POST", "/projects", payload);
     return { created: true, project: created };
   } catch (err) {
     if (err.status === 400 || err.status === 409) {
-      const project = await findGitLabProjectByPath(repoPath, namespaceId);
+      const project = await findGitLabProjectByPath(
+        profile,
+        repoPath,
+        namespaceId,
+      );
       if (project) {
         return { created: false, project };
       }
@@ -688,7 +692,7 @@ async function ensureGitLabProject(repoPath, description, namespaceId) {
   }
 }
 
-async function findOrCreateGitLabSubgroup(parentGroupId, subgroupName) {
+async function findOrCreateGitLabSubgroup(profile, parentGroupId, subgroupName) {
   const safePath = sanitizeGitLabPathSegment(subgroupName);
   if (!safePath) {
     throw new Error(
@@ -696,13 +700,15 @@ async function findOrCreateGitLabSubgroup(parentGroupId, subgroupName) {
     );
   }
 
-  const cacheKey = `${parentGroupId}:${safePath}`;
+  // Different GitLab instances may reuse numeric group ids.
+  const cacheKey = `${profile.baseUrl}:${parentGroupId}:${safePath}`;
   if (gitlabNamespaceCache.has(cacheKey)) {
     return gitlabNamespaceCache.get(cacheKey);
   }
 
   const subgroups = await gitlabGetAll(
-    `${config.gitlabBaseUrl}/api/v4/groups/${encodeURIComponent(
+    profile,
+    `${profile.baseUrl}/api/v4/groups/${encodeURIComponent(
       parentGroupId,
     )}/subgroups?per_page=100&page=1`,
   );
@@ -712,7 +718,7 @@ async function findOrCreateGitLabSubgroup(parentGroupId, subgroupName) {
     return existing.id;
   }
 
-  const created = await gitlabRequest("POST", "/groups", {
+  const created = await gitlabRequest(profile, "POST", "/groups", {
     name: subgroupName,
     path: safePath,
     parent_id: Number(parentGroupId),
@@ -722,12 +728,12 @@ async function findOrCreateGitLabSubgroup(parentGroupId, subgroupName) {
   return created.id;
 }
 
-async function resolveTargetNamespaceIdForGitHubRepo(repo) {
-  if (!config.gitlabTargetNamespaceId) {
+async function resolveTargetNamespaceIdForGitHubRepo(profile, repo) {
+  if (!profile.namespaceId) {
     return null;
   }
 
-  const baseNamespaceId = Number(config.gitlabTargetNamespaceId);
+  const baseNamespaceId = Number(profile.namespaceId);
   if (!config.preserveSourceOwnerAsGitLabGroup) {
     return baseNamespaceId;
   }
@@ -737,7 +743,7 @@ async function resolveTargetNamespaceIdForGitHubRepo(repo) {
     return baseNamespaceId;
   }
 
-  return findOrCreateGitLabSubgroup(baseNamespaceId, ownerName);
+  return findOrCreateGitLabSubgroup(profile, baseNamespaceId, ownerName);
 }
 
 async function ensureMirrorUpToDate(localMirrorPath, gitlabUrlWithToken) {
@@ -828,7 +834,7 @@ async function migrateGitLabToGitHub(project) {
 
   const gitlabUrlWithToken = glHttp.replace(
     "://",
-    `://oauth2:${encodeToken(config.gitlabToken)}@`,
+    `://oauth2:${encodeToken(profiles.sourceGitlab.token)}@`,
   );
 
   const localMirrorPath = path.join(
@@ -837,7 +843,7 @@ async function migrateGitLabToGitHub(project) {
   );
 
   log(
-    `\n=== ${project.path_with_namespace} -> ${config.githubOwner}/${repoName} ===`,
+    `\n=== ${project.path_with_namespace} -> ${profiles.destGithub.owner}/${repoName} ===`,
   );
 
   if (config.dryRun) {
@@ -845,20 +851,23 @@ async function migrateGitLabToGitHub(project) {
     return;
   }
 
-  if (!(await githubRepoExists(repoName))) {
+  const destGithub = profiles.destGithub;
+
+  if (!(await githubRepoExists(destGithub, repoName))) {
     repoName = await askTargetRepoName(
       project.path_with_namespace,
       repoName,
       sanitizeGitHubRepoSegment,
-      (name) => githubRepoExists(name),
+      (name) => githubRepoExists(destGithub, name),
     );
   }
 
   const githubUrlWithToken = `https://x-access-token:${encodeToken(
-    config.githubToken,
-  )}@github.com/${config.githubOwner}/${repoName}.git`;
+    destGithub.token,
+  )}@github.com/${destGithub.owner}/${repoName}.git`;
 
   const { created } = await ensureGitHubRepo(
+    destGithub,
     repoName,
     project.description ||
       `Migrated from GitLab: ${project.path_with_namespace}`,
@@ -875,12 +884,12 @@ async function migrateGitLabToGitHub(project) {
 }
 
 async function migrateGitHubToGitLab(repo) {
-  let gitlabPath = buildGitLabProjectPath(repo);
+  let gitlabPath = buildGitLabProjectPath(repo, profiles.sourceGithub.owner);
   const githubHttp = repo.clone_url;
 
   const githubUrlWithToken = githubHttp.replace(
     "://",
-    `://x-access-token:${encodeToken(config.githubToken)}@`,
+    `://x-access-token:${encodeToken(profiles.sourceGithub.token)}@`,
   );
 
   const localMirrorPath = path.join(
@@ -895,18 +904,24 @@ async function migrateGitHubToGitLab(repo) {
     return;
   }
 
-  const namespaceId = await resolveTargetNamespaceIdForGitHubRepo(repo);
+  const destGitlab = profiles.destGitlab;
+  const namespaceId = await resolveTargetNamespaceIdForGitHubRepo(
+    destGitlab,
+    repo,
+  );
 
-  if (!(await findGitLabProjectByPath(gitlabPath, namespaceId))) {
+  if (!(await findGitLabProjectByPath(destGitlab, gitlabPath, namespaceId))) {
     gitlabPath = await askTargetRepoName(
       repo.full_name,
       gitlabPath,
       sanitizeGitLabPathSegment,
-      async (name) => Boolean(await findGitLabProjectByPath(name, namespaceId)),
+      async (name) =>
+        Boolean(await findGitLabProjectByPath(destGitlab, name, namespaceId)),
     );
   }
 
   const { created, project } = await ensureGitLabProject(
+    destGitlab,
     gitlabPath,
     repo.description || `Migrated from GitHub: ${repo.full_name}`,
     namespaceId,
@@ -915,7 +930,7 @@ async function migrateGitHubToGitLab(repo) {
 
   const gitlabUrlWithToken = project.http_url_to_repo.replace(
     "://",
-    `://oauth2:${encodeToken(config.gitlabToken)}@`,
+    `://oauth2:${encodeToken(destGitlab.token)}@`,
   );
 
   fs.mkdirSync(path.dirname(localMirrorPath), { recursive: true });
@@ -929,12 +944,23 @@ async function main() {
   const direction = await askDirection();
   validateProfilesForDirection(direction, profiles);
   log(`Starting migration: ${direction}`);
+  if (direction === "gitlab-to-github") {
+    log(`Source: GitLab ${profiles.sourceGitlab.baseUrl}`);
+    log(
+      `Destination: GitHub ${profiles.destGithub.owner} (${profiles.destGithub.ownerType})`,
+    );
+  } else {
+    log(
+      `Source: GitHub ${profiles.sourceGithub.owner} (${profiles.sourceGithub.ownerType})`,
+    );
+    log(`Destination: GitLab ${profiles.destGitlab.baseUrl}`);
+  }
   fs.mkdirSync(config.mirrorRoot, { recursive: true });
 
   const items =
     direction === "gitlab-to-github"
-      ? await getGitLabProjects()
-      : await getGitHubRepos();
+      ? await getGitLabProjects(profiles.sourceGitlab)
+      : await getGitHubRepos(profiles.sourceGithub);
   log(`Repositories found: ${items.length}`);
 
   let ok = 0;
@@ -960,7 +986,26 @@ async function main() {
   if (failed > 0) process.exitCode = 1;
 }
 
-main().catch((err) => {
-  logError(`Fatal error: ${err.stack || err}`);
-  process.exit(1);
-});
+if (require.main === module) {
+  main().catch((err) => {
+    logError(`Fatal error: ${err.stack || err}`);
+    process.exit(1);
+  });
+}
+
+// Exported for tests (test/git-migrate.test.js); not a public API.
+module.exports = {
+  LOG_LEVELS,
+  buildProfiles,
+  validateProfilesForDirection,
+  resolveLogLevel,
+  redactUrl,
+  normalizeBaseUrl,
+  normalizeDirection,
+  parseNextLink,
+  sanitizeRepoName,
+  sanitizeGitHubRepoSegment,
+  sanitizeGitLabPathSegment,
+  buildGitHubRepoName,
+  buildGitLabProjectPath,
+};

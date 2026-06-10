@@ -36,12 +36,12 @@ API-клиенты перестают читать глобальный config �
 
 ### Фаза 2: Рефакторинг клиентов (зависят от задачи 2)
 
-- [ ] Task 3: Рефакторинг GitLab-клиента под профили — все gitlab*-функции принимают profile, кэш namespace с baseUrl в ключе
-- [ ] Task 4: Рефакторинг GitHub-клиента под профили — все github*-функции принимают profile
+- [x] Task 3: Рефакторинг GitLab-клиента под профили — все gitlab*-функции принимают profile, кэш namespace с baseUrl в ключе
+- [x] Task 4: Рефакторинг GitHub-клиента под профили — все github*-функции принимают profile
 
 ### Фаза 3: Сценарии и проверка (зависят от задач 3-4)
 
-- [ ] Task 5: Сценарии миграции и main() на профилях — gl2gh: sourceGitlab→destGithub, gh2gl: sourceGithub→destGitlab; валидация по направлению; module.exports + require.main guard
+- [x] Task 5: Сценарии миграции и main() на профилях — gl2gh: sourceGitlab→destGithub, gh2gl: sourceGithub→destGitlab; валидация по направлению; module.exports + require.main guard
 - [ ] Task 6: Тесты node:test + make test — buildProfiles/санитайзеры/normalizeDirection/parseNextLink/LOG_LEVEL; цель `test` в Makefile и в `ci`
 
 ## Commit Plan
