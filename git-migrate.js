@@ -41,6 +41,8 @@ const config = {
     (process.env.PRESERVE_SOURCE_OWNER_AS_GITLAB_GROUP || "true").toLowerCase() === "true",
   lfs: process.env.MIGRATE_LFS === "true",
   migrationDirection: process.env.MIGRATION_DIRECTION || "",
+  interactiveNaming:
+    (process.env.INTERACTIVE_NAMING || "true").toLowerCase() === "true",
 };
 
 const gitlabNamespaceCache = new Map();
@@ -166,6 +168,53 @@ async function askDirection() {
       throw new Error("Invalid direction. Use 1 or 2.");
     }
     return direction;
+  } finally {
+    rl.close();
+  }
+}
+
+async function askTargetRepoName(sourceLabel, defaultName, sanitize, exists) {
+  // Non-interactive runs (cron, CI) and INTERACTIVE_NAMING=false fall back
+  // to the computed default name without blocking on stdin.
+  if (!config.interactiveNaming || !stdin.isTTY) {
+    return defaultName;
+  }
+
+  const rl = createInterface({ input: stdin, output: stdout });
+  try {
+    log(`Repository for '${sourceLabel}' does not exist in target yet.`);
+    for (;;) {
+      const answer = (
+        await rl.question(`New repository name [${defaultName}]: `)
+      ).trim();
+      // The caller already verified the default name is free.
+      if (!answer) return defaultName;
+
+      const sanitized = sanitize(answer);
+      if (!sanitized) {
+        log("Invalid name, try again.");
+        continue;
+      }
+      if (sanitized !== answer) {
+        log(`Using sanitized name: ${sanitized}`);
+      }
+
+      if (await exists(sanitized)) {
+        const confirm = (
+          await rl.question(
+            `Repository '${sanitized}' already exists in target. ` +
+              "push --mirror will overwrite its branches. Continue? (y/N): ",
+          )
+        )
+          .trim()
+          .toLowerCase();
+        if (confirm !== "y" && confirm !== "yes") {
+          continue;
+        }
+      }
+
+      return sanitized;
+    }
   } finally {
     rl.close();
   }
@@ -377,14 +426,21 @@ function safeJsonParse(value) {
   }
 }
 
-async function ensureGitHubRepo(repoName, description) {
+async function githubRepoExists(repoName) {
   try {
     await githubRequest("GET", `/repos/${config.githubOwner}/${repoName}`);
-    return { created: false };
+    return true;
   } catch (err) {
-    if (!String(err.message).includes("404")) {
-      throw err;
+    if (String(err.message).includes("404")) {
+      return false;
     }
+    throw err;
+  }
+}
+
+async function ensureGitHubRepo(repoName, description) {
+  if (await githubRepoExists(repoName)) {
+    return { created: false };
   }
 
   const payload = {
@@ -594,17 +650,13 @@ async function pushMirror(
 }
 
 async function migrateGitLabToGitHub(project) {
-  const repoName = buildGitHubRepoName(project);
+  let repoName = buildGitHubRepoName(project);
   const glHttp = project.http_url_to_repo;
 
   const gitlabUrlWithToken = glHttp.replace(
     "://",
     `://oauth2:${encodeToken(config.gitlabToken)}@`,
   );
-
-  const githubUrlWithToken = `https://x-access-token:${encodeToken(
-    config.githubToken,
-  )}@github.com/${config.githubOwner}/${repoName}.git`;
 
   const localMirrorPath = path.join(
     config.mirrorRoot,
@@ -619,6 +671,19 @@ async function migrateGitLabToGitHub(project) {
     log("[DRY RUN] skip clone/push");
     return;
   }
+
+  if (!(await githubRepoExists(repoName))) {
+    repoName = await askTargetRepoName(
+      project.path_with_namespace,
+      repoName,
+      sanitizeGitHubRepoSegment,
+      (name) => githubRepoExists(name),
+    );
+  }
+
+  const githubUrlWithToken = `https://x-access-token:${encodeToken(
+    config.githubToken,
+  )}@github.com/${config.githubOwner}/${repoName}.git`;
 
   const { created } = await ensureGitHubRepo(
     repoName,
@@ -637,7 +702,7 @@ async function migrateGitLabToGitHub(project) {
 }
 
 async function migrateGitHubToGitLab(repo) {
-  const gitlabPath = buildGitLabProjectPath(repo);
+  let gitlabPath = buildGitLabProjectPath(repo);
   const githubHttp = repo.clone_url;
 
   const githubUrlWithToken = githubHttp.replace(
@@ -658,6 +723,15 @@ async function migrateGitHubToGitLab(repo) {
   }
 
   const namespaceId = await resolveTargetNamespaceIdForGitHubRepo(repo);
+
+  if (!(await findGitLabProjectByPath(gitlabPath, namespaceId))) {
+    gitlabPath = await askTargetRepoName(
+      repo.full_name,
+      gitlabPath,
+      sanitizeGitLabPathSegment,
+      async (name) => Boolean(await findGitLabProjectByPath(name, namespaceId)),
+    );
+  }
 
   const { created, project } = await ensureGitLabProject(
     gitlabPath,
