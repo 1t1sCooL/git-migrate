@@ -26,7 +26,8 @@ make help      # все доступные команды
 
 ## Возможности
 
-- **Два направления** — `GitLab → GitHub` и `GitHub → GitLab`, выбор интерактивно или через `MIGRATION_DIRECTION`.
+- **Бекап одной командой** — `make backup`: fetch всех доступных рабочих репозиториев и push --mirror в личные GitLab + GitHub за один проход (режим `sync`, готов к cron). Подробнее — в [Backup](docs/backup.md).
+- **Два направления миграции** — `GitLab → GitHub` и `GitHub → GitLab`, выбор интерактивно или через `MIGRATION_DIRECTION`.
 - **Профили источника и назначений** — раздельные токены и base URL: рабочий GitLab как источник, личные GitLab/GitHub как назначения (`SOURCE_*`/`DEST_*` с fallback на `GITLAB_*`/`GITHUB_*`).
 - **Полное зеркало** — перенос всей истории через `git clone --mirror` / `git push --mirror`.
 - **Идемпотентность** — репозитории/проекты/подгруппы на стороне назначения создаются только если их нет.
@@ -52,6 +53,7 @@ MIGRATION_DIRECTION=gitlab-to-github DRY_RUN=false node git-migrate.js
 |--------|----------|
 | [Getting Started](docs/getting-started.md) | Требования, установка, настройка `.env`, первый запуск |
 | [Configuration](docs/configuration.md) | Полный справочник переменных окружения и флагов |
+| [Backup](docs/backup.md) | Бекап одной командой: рабочий GitLab → личные GitLab + GitHub |
 | [Usage](docs/usage.md) | Направления миграции и логика переноса |
 
 ## Лицензия

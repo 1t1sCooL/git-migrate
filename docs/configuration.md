@@ -46,7 +46,9 @@
 
 | Переменная | Значения | По умолчанию |
 |------------|----------|--------------|
-| `MIGRATION_DIRECTION` | `gitlab-to-github` или `github-to-gitlab` (также принимаются `1`/`2`, `gl2gh`/`gh2gl` и синонимы) | пусто → скрипт спросит интерактивно |
+| `MIGRATION_DIRECTION` | `gitlab-to-github`, `github-to-gitlab` или `sync` (также `1`/`2`/`3`, `gl2gh`/`gh2gl`/`backup`) | пусто → скрипт спросит интерактивно |
+
+Режим `sync` — бекап рабочего GitLab в личные GitLab и GitHub одной командой, см. [Backup](backup.md).
 
 ## Именование репозиториев
 
@@ -66,6 +68,7 @@
 | `DRY_RUN` | `true`/`false` | `true` | Безопасный прогон без реальных изменений. |
 | `MIRROR_ROOT` | путь | `./mirrors` | Локальная директория для зеркальных клонов. |
 | `LOG_LEVEL` | `debug`/`info`/`warn`/`error` | `info` | Уровень логирования. `debug` трассирует API-вызовы и git-команды; креденшалы в URL маскируются. |
+| `SYNC_FLAT_NAMES` | `true`/`false` | `false` | Имена в режиме sync: `false` — полный путь `group__sub__project` (без коллизий), `true` — только имя проекта. |
 
 ## Замечания
 
